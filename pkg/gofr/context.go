@@ -166,7 +166,7 @@ func newContext(w Responder, r Request, c *container.Container) *Context {
 		Request:       r,
 		responder:     w,
 		Container:     c,
-		ContextLogger: *logging.NewContextLogger(r.Context(), c.Logger),
+		ContextLogger: logging.ContextLoggerFor(r.Context(), c.Logger),
 	}
 }
 
@@ -177,7 +177,7 @@ func newCMDContext(w Responder, r Request, c *container.Container, out terminal.
 		Request:       r,
 		Container:     c,
 		Out:           out,
-		ContextLogger: *logging.NewContextLogger(r.Context(), c.Logger),
+		ContextLogger: logging.ContextLoggerFor(r.Context(), c.Logger),
 	}
 }
 

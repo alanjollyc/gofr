@@ -299,3 +299,37 @@ func BenchmarkContextLoggerInfo(b *testing.B) {
 		cl.Info("request handled successfully")
 	}
 }
+
+// TestContextLoggerForMatchesPointerConstructor pins that the value constructor
+// and the pointer constructor produce identical loggers, so the per-request
+// construction site can use either.
+func TestContextLoggerForMatchesPointerConstructor(t *testing.T) {
+	ctx := benchSpanContext()
+	base := newBufLogger(&bytes.Buffer{})
+
+	ptr := NewContextLogger(ctx, base)
+	val := ContextLoggerFor(ctx, base)
+
+	require.Equal(t, ptr.traceID, val.traceID)
+	require.Equal(t, ptr.traceArg, val.traceArg)
+	require.NotEmpty(t, val.traceID)
+}
+
+// TestContextLoggerForNoTrace covers the no-span case: no trace ID, no marker.
+func TestContextLoggerForNoTrace(t *testing.T) {
+	val := ContextLoggerFor(context.Background(), newBufLogger(&bytes.Buffer{}))
+
+	require.Empty(t, val.traceID)
+	require.Nil(t, val.traceArg)
+}
+
+// TestContextLoggerForStillLogsTraceID is the feature guard: the trace ID must
+// still reach the emitted log line.
+func TestContextLoggerForStillLogsTraceID(t *testing.T) {
+	buf := &bytes.Buffer{}
+	val := ContextLoggerFor(benchSpanContext(), newBufLogger(buf))
+
+	val.Info("hello")
+
+	require.Contains(t, buf.String(), "0102030405060708090a0b0c0d0e0f10")
+}

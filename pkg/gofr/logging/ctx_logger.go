@@ -27,6 +27,19 @@ type ContextLogger struct {
 // and automatically appends OpenTelemetry trace information (trace ID) to log output
 // when available in the context.
 func NewContextLogger(ctx context.Context, base Logger) *ContextLogger {
+	cl := ContextLoggerFor(ctx, base)
+
+	return &cl
+}
+
+// ContextLoggerFor returns a ContextLogger by value.
+//
+// It exists because the per-request construction site stores the logger in a
+// struct field, so the pointer returned by NewContextLogger is dereferenced and
+// copied immediately — the heap allocation backing it is then garbage. Callers
+// that need a pointer keep using NewContextLogger; callers that store a value
+// use this and allocate nothing for the wrapper itself.
+func ContextLoggerFor(ctx context.Context, base Logger) ContextLogger {
 	var traceID string
 
 	sc := trace.SpanFromContext(ctx).SpanContext()
@@ -35,7 +48,7 @@ func NewContextLogger(ctx context.Context, base Logger) *ContextLogger {
 		traceID = sc.TraceID().String()
 	}
 
-	cl := &ContextLogger{base: base, traceID: traceID}
+	cl := ContextLogger{base: base, traceID: traceID}
 
 	if traceID != "" {
 		cl.traceArg = map[string]any{traceIDMarkerKey: traceID}
