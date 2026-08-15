@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -1865,3 +1867,86 @@ func TestResponder_Char_SpecialTypePointersWithError(t *testing.T) {
 // errCharBoom is the stand-in error for the characterization tests above; a
 // package-level static error keeps err113 satisfied.
 var errCharBoom = errors.New("boom")
+
+// TestRespondEncoderIsReusedAcrossResponses pins that pooling the encoder with
+// its buffer does not leak one response into the next: each body must contain
+// only its own payload.
+func TestRespondEncoderIsReusedAcrossResponses(t *testing.T) {
+	for i := range 50 {
+		w := httptest.NewRecorder()
+		want := fmt.Sprintf("payload-%d", i)
+
+		NewResponder(w, http.MethodGet).Respond(map[string]string{"v": want}, nil)
+
+		body := w.Body.String()
+		require.Contains(t, body, want)
+		require.Equal(t, 1, strings.Count(body, "payload-"),
+			"a response must carry only its own payload, got %q", body)
+	}
+}
+
+// TestRespondEncoderConcurrent runs the pooled encoder under contention; the
+// race detector is the point of this test.
+func TestRespondEncoderConcurrent(t *testing.T) {
+	var wg sync.WaitGroup
+
+	for g := range 32 {
+		wg.Add(1)
+
+		go func(g int) {
+			defer wg.Done()
+
+			for i := range 25 {
+				w := httptest.NewRecorder()
+				want := fmt.Sprintf("g%d-i%d", g, i)
+
+				NewResponder(w, http.MethodGet).Respond(map[string]string{"v": want}, nil)
+
+				if !strings.Contains(w.Body.String(), want) {
+					t.Errorf("response lost its payload: %q", w.Body.String())
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+}
+
+// TestRespondEnvelopeDoesNotLeakMetadata is the isolation guard for reusing the
+// response envelope from the pool: a response carrying metadata must not leave
+// it behind for the next one, which sets no metadata at all.
+func TestRespondEnvelopeDoesNotLeakMetadata(t *testing.T) {
+	withMeta := httptest.NewRecorder()
+	NewResponder(withMeta, http.MethodGet).Respond(
+		resTypes.Response{Data: "first", Metadata: map[string]any{"secret": "classified"}}, nil)
+
+	require.Contains(t, withMeta.Body.String(), "classified")
+
+	// Drive enough follow-ups to make reuse of that pooled envelope certain.
+	for range 50 {
+		plain := httptest.NewRecorder()
+		NewResponder(plain, http.MethodGet).Respond(map[string]string{"v": "second"}, nil)
+
+		require.NotContains(t, plain.Body.String(), "classified",
+			"metadata from an earlier response leaked through the pool")
+		require.NotContains(t, plain.Body.String(), "metadata")
+	}
+}
+
+// TestRespondEnvelopeErrorDoesNotLeak covers the same hazard for the error field.
+func TestRespondEnvelopeErrorDoesNotLeak(t *testing.T) {
+	failed := httptest.NewRecorder()
+	NewResponder(failed, http.MethodGet).Respond(nil, errTestResponder)
+
+	require.Contains(t, failed.Body.String(), "error")
+
+	for range 50 {
+		ok := httptest.NewRecorder()
+		NewResponder(ok, http.MethodGet).Respond(map[string]string{"v": "fine"}, nil)
+
+		require.NotContains(t, ok.Body.String(), errTestResponder.Error(),
+			"an error from an earlier response leaked through the pool")
+	}
+}
+
+var errTestResponder = errors.New("responder pool guard")
